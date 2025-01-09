@@ -29,29 +29,30 @@ logging.getLogger('tensorboardX').setLevel(logging.WARNING)
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env", default="MountainCar-v0", type=str, help="Train gym env [LunarLander-v2, MountainCar-v0, CartPole-v1, Pendulum-v1]",)
+    parser.add_argument("--env", default="Taxi-v3", type=str, help="Train gym env [LunarLander-v2, MountainCar-v0, CartPole-v1, Pendulum-v1]",)
     parser.add_argument("--group", default=None, type=str, help="Wandb run group")
     parser.add_argument("--project", default=None, type=str, help="Wandb project")
     parser.add_argument("--la", default=1e-6, type=float, help="Regularization for the action-value function estimators",)
-    parser.add_argument("--eta", default=0.1, type=float, help="Step size of the Policy Mirror Descent")
+    parser.add_argument("--eta", default=1, type=float, help="Step size of the Policy Mirror Descent")
     parser.add_argument("--gamma", default=0.99, type=float, help="Discount factor")
-    parser.add_argument("--sigma", default=0.2, type=float, help="")
-    parser.add_argument("--q-mem", "-qm", default=0, type=int, help="Number of Q-memories to use to use, i.e., batch size for Q functions",)
+    parser.add_argument("--sigma", default=0.2, type=float, help="Std of Gaussian Kernel")
+    parser.add_argument("--q-mem", "-qm", default=None, type=int, help="Number of Q-memories to use to use, i.e., batch size for Q functions",)
     parser.add_argument("--delete-Q-memory", "-dqm", default=False, action="store_true", help="Delete the previously estimated Q functions",)
     parser.add_argument("--early-stopping", "-es", default=None, type=int, help="Number of consecutive episodes above <env> reward threshold for early stopping the data collection",)
     parser.add_argument("--warmup-episodes", "-we", default=1, type=int, help="Number of warmups epochs for initializing the P i.e. (transition probability) and Q matrices",)
-    parser.add_argument("--epochs", "-e", default=200, type=int, help="Number of training epochs, i.e. Data Sampling, P computation, Policy Mirror Descent, and Testing",)
+    parser.add_argument("--epochs", "-e", default=50, type=int, help="Number of training epochs, i.e. Data Sampling, P computation, Policy Mirror Descent, and Testing",)
     parser.add_argument("--train-episodes","-te", default=1, type=int, help="Number of episodes used to sample for each epoch",)
-    parser.add_argument("--parallel-envs", "-pe", default=3, type=int, help="Number of parallel environments",)
-    parser.add_argument("--subsamples", "-subs", default=10000, type=int, help="Number of subsamples for nystrom kernel",)
-    parser.add_argument("--iter-pmd", "-pmd", default=1, type=int, help="Number of iteration to update policy parameters in an off-policy manner", )
+    parser.add_argument("--parallel-envs", "-pe", default=5, type=int, help="Number of parallel environments",)
+    parser.add_argument("--subsamples", "-subs", default=10000000, type=int, help="Number of subsamples for nystrom kernel",)
+    parser.add_argument("--n_reduced_rank", "-nrr", default=500, type=int, help="Number of ...",)
+    parser.add_argument("--iter-pmd", "-pmd", default=10, type=int, help="Number of iteration to update policy parameters in an off-policy manner", )
     parser.add_argument("--eval-episodes", "-ee", default=1, type=int, help="Number of evaluation episodes")
     parser.add_argument("--save-gif-every","-sge", default=None, type=int, help="Save gif every <save-gif-every> epochs",)
     parser.add_argument("--save-checkpoint-every","-sce", default=20, type=int, help="Save checkpoint every <save-checkpoint-every> epochs",)
-    parser.add_argument("--eval-every", default=1, type=int, help="Evaluate policy every <eval-every> epochs",)
-    parser.add_argument("--seed", default=0, type=int, help="seed")
+    parser.add_argument("--eval-every", default=10, type=int, help="Evaluate policy every <eval-every> epochs",)
+    parser.add_argument("--seed", default=6, type=int, help="seed")
     parser.add_argument("--checkpoint", "-c", default=None, type=str, help="Checkpoint path, None means no checkpoint loading",)
-    parser.add_argument("--device", type=str, default="gpu",  help="Device setting <cpu> or <gpu>",)
+    parser.add_argument("--device", type=str, default="cpu",  help="Device setting <cpu> or <gpu>",)
     parser.add_argument("--notes", default=None, type=str, help="Wandb notes")
     parser.add_argument("--tags", "--wandb-tags", type=str, default=[], nargs="+", help="Tags for wandb run, e.g.: --tags 'optimized' 'baseline' ",)
     parser.add_argument("--offline", default=False, action="store_true", help="Offline run without wandb",)
@@ -73,7 +74,6 @@ def parse_env(env_name, parallel_envs, sigma):
             map_name="4x4",
             is_slippery=False,
             render_mode="rgb_array",
-            # wrappers=[RewardRangeWrapper],
         )
         kernel = dirac_kernel
 
@@ -320,6 +320,7 @@ if __name__ == "__main__":
             gamma=gamma, 
             kernel=jit_kernel,
             subsamples=subsamples,
+            n_reduced_rank=args.n_reduced_rank,
             q_memories=q_memories,
             delete_Q_memory=delete_Q_memory,
             early_stopping=early_stopping,

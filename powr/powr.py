@@ -22,6 +22,7 @@ class POWR:
             la=0.1, 
             gamma=0.99, 
             kernel=None,
+            n_reduced_rank=1000,
             subsamples=100,
             q_memories=10,
             delete_Q_memory=False,
@@ -46,6 +47,7 @@ class POWR:
             la (float): The regularization parameter.
             gamma (float): The discount factor.
             kernel (function): The kernel function to use for the MDP manager.
+            n_reduced_rank (int): The number of reduced rank components to use for the kernel approximation.
             subsamples (int): The number of subsamples to use for the kernel approximation.
             q_memories (int): The number of Q-function memories to store.
             delete_Q_memory (bool): Whether to delete the Q-function memory after training.
@@ -97,6 +99,7 @@ class POWR:
             gamma=self.gamma,
             n_subsamples=self.subsamples,
             early_stopping=early_stopping,
+            n_reduced_rank=n_reduced_rank,
             seed=self.seed,
             log_path=self.run_path,
         )

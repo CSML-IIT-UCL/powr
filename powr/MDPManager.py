@@ -26,6 +26,7 @@ class MDPManager:
         la=1e-3,
         kernel=None,
         n_subsamples=None,
+        n_reduced_rank=1000,
         early_stopping=None,    
         eps_softmax=1e-9,
         seed=None,
@@ -57,6 +58,7 @@ class MDPManager:
         self.la = la
         self.eps_softmax = eps_softmax
         self.early_stopping = early_stopping
+        self.n_reduced_rank = n_reduced_rank
 
 
         # to keep track of the training expoenents
@@ -82,6 +84,7 @@ class MDPManager:
             n_subsamples=self.n_subsamples,
             early_stopping=self.early_stopping,
             log_path=self.log_path,
+            n_components=self.n_reduced_rank,
         )
 
     def check_data_collected_but_not_trained(self):
@@ -262,14 +265,20 @@ class MDPManager:
                     # Now assign final_obs to the new_states using the mask
                     new_states[new_terminated_mask] = final_obs
 
-                    # if the episode terminated, record the last state as a sink state
-                    rewards = jnp.where(new_terminated_mask, 0, rewards)                    
-
-
-                    f_X = jnp.vstack((f_X, new_states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else new_states[new_terminated_mask]))
+                    f_X = jnp.vstack((f_X, states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else states[new_terminated_mask]))
                     f_Y_transitions = jnp.vstack((f_Y_transitions, new_states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else new_states[new_terminated_mask]))
                     f_Y_rewards = jnp.hstack((f_Y_rewards, rewards[new_terminated_mask]))
                     f_A = jnp.hstack((f_A, actions[new_terminated_mask]))
+
+                    # if the episode terminated, record the last state as a sink state #TODO
+                    rewards = jnp.where(new_terminated_mask, 0, rewards)
+
+                    for a in range(self.n_actions):
+                        actions = jnp.where(new_terminated_mask, a, actions)
+                        f_X = jnp.vstack((f_X, new_states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else new_states[new_terminated_mask]))
+                        f_Y_transitions = jnp.vstack((f_Y_transitions, new_states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else new_states[new_terminated_mask]))
+                        f_Y_rewards = jnp.hstack((f_Y_rewards, rewards[new_terminated_mask]))
+                        f_A = jnp.hstack((f_A, actions[new_terminated_mask]))
 
                 logging.debug(f"t=, {total_timesteps} pi={pi} ,s= {states}, a={actions}, next s = {new_states} , {terminations}, {truncations}")
 

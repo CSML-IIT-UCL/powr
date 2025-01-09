@@ -7,7 +7,7 @@ import logging
 from powr.kernels import dirac_kernel
 
 class IncrementalRLS:
-    def __init__(self, kernel=None, n_actions=None, la=1e-3, n_subsamples=None, early_stopping=None, log_path=None):
+    def __init__(self, kernel=None, n_actions=None, la=1e-3, n_subsamples=None, early_stopping=None, log_path=None, n_components=1000):
 
         assert kernel is not None
         assert n_actions is not None
@@ -22,7 +22,7 @@ class IncrementalRLS:
         # reset stuff
         self.n = 0
         self.n_sub = None
-        self.n_components = 1000
+        self.n_components = n_components
 
         self.early_stopping_episodes= early_stopping # TODO: find a new effective strategy to early stop the collection
         self.log_path = log_path
