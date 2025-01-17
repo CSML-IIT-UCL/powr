@@ -156,7 +156,7 @@ class POWR:
             start_training = time.time()
             self.mdp_manager.train()
             t_training = time.time() - start_training
-
+                
             # ** Applying Policy Mirror Descent to Policy**
             start_pmd = time.time()
             self.mdp_manager.policy_mirror_descent(iterations_pmd)

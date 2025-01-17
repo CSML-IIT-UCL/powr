@@ -101,7 +101,7 @@ class IncrementalRLS:
         )
 
 
-    def subsample(self):
+    def subsample_old(self):
 
         self.check_subsample()
 
@@ -130,6 +130,41 @@ class IncrementalRLS:
 
         self._SUBSAMPLE_HAS_BEEN_CALLED = True
 
+    def subsample(self): # TODO
+
+        self.check_subsample()
+
+        if self.n == 0:
+            return
+
+        seed = int.from_bytes(os.urandom(4), "big")
+        key = jrandom.PRNGKey(seed)
+
+        self.XA = jnp.hstack([self.X, self.A.reshape((-1,1))])
+        # Get indices of unique rows
+        _, idx = jnp.unique(self.XA, return_index=True, axis=0)
+        print(f"Number of unique rows: {idx.shape[0]}")
+        
+        # # if the number of points is smaller than the number of subsamples, we just use all the points
+        # self.sub_indices = jnp.arange(self.n)
+        # if self.n > self.n_subsamples:
+        #     self.sub_indices = jrandom.choice(
+        #         key, int(self.n), (self.n_subsamples,), replace=False
+        #     )
+        self.sub_indices = idx
+        self.n_sub = self.sub_indices.shape[0]
+
+        self.X_sub = self.X[self.sub_indices]
+        self.A_sub = self.A[self.sub_indices]
+
+        self.K_full_sub = jnp.zeros((0, self.n_sub))
+        self.K_transitions_sub = jnp.zeros((0, self.n_sub))
+
+        self.update_kernels(self.A, self.X, self.Y_transitions)
+        self.K_sub_sub = self.K_full_sub[self.sub_indices]
+
+        self._SUBSAMPLE_HAS_BEEN_CALLED = True
+
     def train(self):
 
         if not self._SUBSAMPLE_HAS_BEEN_CALLED:
@@ -138,7 +173,7 @@ class IncrementalRLS:
         V, W = jax.lax.linalg.eigh(self.K_sub_sub)
         effective_components = min(self.K_sub_sub.shape[0], self.n_components)
         self.V = V[:, -effective_components : ].T
-
+        print(f"self kernel shape: {self.K_sub_sub.shape}")
         L = jax.lax.linalg.cholesky(
             self.K_full_sub.T @ self.K_full_sub
             + self.n * self.la * self.K_sub_sub
@@ -162,9 +197,7 @@ class IncrementalRLS:
             transpose_a=True,
         )
 
-        logging.debug(f"Results: {W}")
         self.r = W[:, -1].reshape(-1, 1)
-        # logging.debug(f"Results: {self.r}\n\n\n")
         self.B = W[:, :-1]
 
         # check if the results contain nan

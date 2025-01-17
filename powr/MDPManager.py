@@ -2,6 +2,7 @@
 import os
 import cv2
 import jax
+import time
 import wandb
 import pickle
 import logging
@@ -99,45 +100,47 @@ class MDPManager:
 
         V = self.FTL.V
 
+        start_exponents = time.time()
         f_exponents = (
             self.f_prev_exponents
             + self.eta * self.FTL.K_transitions_sub @ self.f_cumQ_weights
         )
+        print(f"exponent computation time: {time.time() - start_exponents}")
         f_pi = self.softmax(f_exponents)
 
         pPit = self.FTL.K_transitions_sub.reshape(
             self.FTL.n, self.FTL.n_sub, 1
         ) * f_pi.reshape(self.FTL.n, 1, self.n_actions) 
         pPit = pPit[:, jnp.arange(self.FTL.n_sub), self.FTL.A_sub] # M matrix in paper
+
+        start_bing_M = time.time()
         f_big_M = jnp.eye(self.FTL.n_sub) - (self.gamma) * self.FTL.B @ pPit # Id - gamma * B * M
-        # logging.debug(f"Exponents: {self.FTL.r}")
+        print(f"big M computation time: {time.time() - start_bing_M}")
+
+        start_tmp_q = time.time()
         f_tmp_Q = V.T @ jnp.linalg.solve(V @ f_big_M @ V.T, V @ self.FTL.r) # c
-        
+        print(f"tmp Q computation time: {time.time() - start_tmp_q}")
+
         self.f_cumQ_weights += f_tmp_Q * self.f_Q_mask
-        # logging.debug(f"Q weights: {self.f_cumQ_weights}")
-        # if loggin in debug mode exit
-        # if logging.getLogger().getEffectiveLevel() == logging.DEBUG:
-        #     print("Exiting at the end of the update_Q function in MDPManager.py")
-        #     exit()
+        
 
-    def get_Q_pi(self, states, actions):
-        V = self.FTL.V
+    # def get_Q_pi(self, states, actions):
+    #     V = self.FTL.V
 
-        f_exponents = (
-            self.f_prev_exponents
-            + self.eta * self.FTL.K_transitions_sub @ self.f_cumQ_weights
-        )
-        f_pi = self.softmax(f_exponents)
+    #     f_exponents = (
+    #         self.f_prev_exponents
+    #         + self.eta * self.FTL.K_transitions_sub @ self.f_cumQ_weights
+    #     )
+    #     f_pi = self.softmax(f_exponents)
 
-        pPit = self.FTL.K_transitions_sub.reshape(
-            self.FTL.n, self.FTL.n_sub, 1
-        ) * f_pi.reshape(self.FTL.n, 1, self.n_actions) 
-        pPit = pPit[:, jnp.arange(self.FTL.n_sub), self.FTL.A_sub] # M matrix in paper
-        f_big_M = jnp.eye(self.FTL.n_sub) - (self.gamma) * self.FTL.B @ pPit # Id - gamma * B * M
-        logging.debug(f"Exponents: {self.FTL.r}")
-        f_tmp_Q = V.T @ jnp.linalg.solve(V @ f_big_M @ V.T, V @ self.FTL.r) # c
+    #     pPit = self.FTL.K_transitions_sub.reshape(
+    #         self.FTL.n, self.FTL.n_sub, 1
+    #     ) * f_pi.reshape(self.FTL.n, 1, self.n_actions) 
+    #     pPit = pPit[:, jnp.arange(self.FTL.n_sub), self.FTL.A_sub] # M matrix in paper
+    #     f_big_M = jnp.eye(self.FTL.n_sub) - (self.gamma) * self.FTL.B @ pPit # Id - gamma * B * M
+    #     f_tmp_Q = V.T @ jnp.linalg.solve(V @ f_big_M @ V.T, V @ self.FTL.r) # c
 
-        # print("kernel",jnp.sum(self.FTL.kernel(states, self.FTL.X_sub), )
+    #     # print("kernel",jnp.sum(self.FTL.kernel(states, self.FTL.X_sub), )
 
 
     # Delete the Q function from memory
@@ -225,6 +228,7 @@ class MDPManager:
             # Vectorized reset of environments
             states, _ = self.env.reset()    
            
+            start_sampling_episode = time.time()
             while True:
                 actions, pi = self.sample_action(states)
                 # round all elements in pi to the third decimal
@@ -234,7 +238,10 @@ class MDPManager:
                 
                 # Perform vectorized step with all environments
                 new_states, rewards, terminations, truncations, infos = self.env.step(np.array(actions))  # Convert actions to CPU
-            
+                # if a reward inside rewards array grather than zero print rewards
+                if jnp.any(rewards > 0):
+                    print(rewards)
+
                 # Update cumulative rewards
                 cum_rewards[episode_id] += jnp.multiply(rewards,~done)
 
@@ -265,10 +272,11 @@ class MDPManager:
                     # Now assign final_obs to the new_states using the mask
                     new_states[new_terminated_mask] = final_obs
 
-                    f_X = jnp.vstack((f_X, states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else states[new_terminated_mask]))
-                    f_Y_transitions = jnp.vstack((f_Y_transitions, new_states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else new_states[new_terminated_mask]))
-                    f_Y_rewards = jnp.hstack((f_Y_rewards, rewards[new_terminated_mask]))
-                    f_A = jnp.hstack((f_A, actions[new_terminated_mask]))
+                    # TODO: check if it is necessary or duplicated
+                    # f_X = jnp.vstack((f_X, states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else states[new_terminated_mask]))
+                    # f_Y_transitions = jnp.vstack((f_Y_transitions, new_states[new_terminated_mask].reshape(-1, 1) if isinstance(self.env.single_observation_space, gym.spaces.Discrete) else new_states[new_terminated_mask]))
+                    # f_Y_rewards = jnp.hstack((f_Y_rewards, rewards[new_terminated_mask]))
+                    # f_A = jnp.hstack((f_A, actions[new_terminated_mask]))
 
                     # if the episode terminated, record the last state as a sink state #TODO
                     rewards = jnp.where(new_terminated_mask, 0, rewards)
@@ -280,7 +288,6 @@ class MDPManager:
                         f_Y_rewards = jnp.hstack((f_Y_rewards, rewards[new_terminated_mask]))
                         f_A = jnp.hstack((f_A, actions[new_terminated_mask]))
 
-                logging.debug(f"t=, {total_timesteps} pi={pi} ,s= {states}, a={actions}, next s = {new_states} , {terminations}, {truncations}")
 
                 non_terminated_mask = ~done
                 
@@ -306,6 +313,7 @@ class MDPManager:
                 if done.all():
                     break
         
+            print("episode_id", episode_id, "sampled in", time.time() - start_sampling_episode)
         self.FTL.collect_data(f_A, f_X, f_Y_transitions, f_Y_rewards.reshape(-1, 1), cum_rewards.flatten().mean() >= self.env.spec.reward_threshold, seed = self.seed)
 
         self.last_f_X = f_X
