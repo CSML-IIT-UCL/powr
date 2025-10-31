@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument("--eval-every", default=1, type=int, help="Evaluate policy every <eval-every> epochs",)
     parser.add_argument("--seed", default=0, type=int, help="seed")
     parser.add_argument("--checkpoint", "-c", default=None, type=str, help="Checkpoint path, None means no checkpoint loading",)
-    parser.add_argument("--device", type=str, default="gpu",  help="Device setting <cpu> or <gpu>",)
+    parser.add_argument("--device", type=str, default="cpu",  help="Device setting <cpu> or <gpu>",)
     parser.add_argument("--notes", default=None, type=str, help="Wandb notes")
     parser.add_argument("--tags", "--wandb-tags", type=str, default=[], nargs="+", help="Tags for wandb run, e.g.: --tags 'optimized' 'baseline' ",)
     parser.add_argument("--offline", default=False, action="store_true", help="Offline run without wandb",)
