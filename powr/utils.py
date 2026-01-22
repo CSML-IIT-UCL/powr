@@ -117,7 +117,8 @@ warnings.showwarning = custom_warning_handler
 
 def log_epoch_statistics(writer, log_file, epoch, eval_result, train_result, n_train_episodes,
                          n_iter_pmd, n_warmup_episodes, total_timesteps, 
-                         t_sampling, t_training, t_pmd, t_eval, execution_time
+                         t_sampling, t_training, t_pmd, t_eval, execution_time,
+                         extra_metrics=None
                          ):
     # Log to Tensorboard
     global_step = epoch
@@ -170,11 +171,38 @@ def log_epoch_statistics(writer, log_file, epoch, eval_result, train_result, n_t
         ["Execution time (s)", fancy_float(execution_time)],
     ])
 
+    # Log extra metrics if provided
+    if extra_metrics is not None:
+        for key, value in extra_metrics.items():
+            if isinstance(value, float):
+                writer.add_scalar(key, value, global_step)
+                # Add selected metrics to table
+                if key in ['metrics/policy_entropy', 'metrics/mean_q_value', 
+                           'metrics/operator_error_hs', 'metrics/reward_error_rkhs']:
+                    short_key = key.replace('metrics/', '')
+                    table.append([short_key, fancy_float(value)])
+            elif isinstance(value, (int, bool)):
+                writer.add_scalar(key, float(value), global_step)
 
-    fancy_grid = tabulate(table, headers="firstrow", tablefmt="fancy_grid", numalign='right')
+    # Use "grid" instead of "fancy_grid" for Windows compatibility
+    # fancy_grid uses Unicode characters that cause encoding errors on Windows
+    import platform
+    if platform.system() == "Windows":
+        tablefmt = "grid"
+    else:
+        tablefmt = "fancy_grid"
+    
+    table_str = tabulate(table, headers="firstrow", tablefmt=tablefmt, numalign='right')
   
     # Log to stdout and log file
     log_file.write("\n")
-    log_file.write(fancy_grid)
+    log_file.write(table_str)
     log_file.flush()
-    print(fancy_grid)
+    
+    # Print with error handling for Windows encoding issues
+    try:
+        print(table_str)
+    except UnicodeEncodeError:
+        # Fallback to simple format
+        simple_table = tabulate(table, headers="firstrow", tablefmt="simple", numalign='right')
+        print(simple_table)

@@ -2,6 +2,7 @@
 import os
 import cv2
 import jax
+import time
 import wandb
 import pickle
 import logging
@@ -9,6 +10,7 @@ import imageio
 import numpy as np
 import jax.numpy as jnp
 import gymnasium as gym
+from typing import Dict, Any, Optional
 
 from powr.Qmodel import Qmodel
 from powr.kernels import softmax
@@ -26,11 +28,11 @@ class MDPManager:
         la=1e-3,
         kernel=None,
         n_subsamples=None,
-        early_stopping=None,    
+        early_stopping=None,
         eps_softmax=1e-9,
         seed=None,
         log_path=None,
-
+        use_woodbury=True,
     ):
 
         assert kernel is not None
@@ -73,7 +75,13 @@ class MDPManager:
         self.f_cumQ_weights = None
         self.f_Q_mask = None
 
-        self.log_path = log_path    
+        self.log_path = log_path
+        self.use_woodbury = use_woodbury
+
+        # Metrics tracking
+        self.track_metrics = True
+        self.last_metrics: Dict[str, Any] = {}
+        self._pmd_iteration = 0
 
         self.FTL = IncrementalRLS(
             kernel=self.kernel,
@@ -82,6 +90,7 @@ class MDPManager:
             n_subsamples=self.n_subsamples,
             early_stopping=self.early_stopping,
             log_path=self.log_path,
+            use_woodbury=self.use_woodbury,
         )
 
     def check_data_collected_but_not_trained(self):
@@ -403,6 +412,109 @@ class MDPManager:
 
         for _ in range(n_iter):
             self.update_Q()
+            self._pmd_iteration += 1
+        
+        # Compute metrics after PMD iterations
+        if self.track_metrics:
+            self._compute_policy_metrics()
+
+    def _compute_policy_metrics(self):
+        """Compute and store policy-related metrics."""
+        if self.f_cumQ_weights is None or self.FTL.n_sub is None:
+            return
+            
+        # Compute policy entropy at subsample points
+        policy_entropy = self._compute_policy_entropy()
+        
+        # Compute mean Q-value
+        mean_q = self._compute_mean_q_value()
+        
+        # Get FTL metrics
+        ftl_metrics = self.FTL.get_metrics()
+        
+        self.last_metrics = {
+            'policy_entropy': policy_entropy,
+            'mean_q_value': mean_q,
+            'pmd_iteration': self._pmd_iteration,
+            **ftl_metrics,
+        }
+        
+    def _compute_policy_entropy(self, eps: float = 1e-10) -> float:
+        """
+        Compute mean entropy of policy at subsample points.
+        
+        H(pi) = -sum_a pi(a|s) log pi(a|s)
+        """
+        if self.f_cumQ_weights is None or self.FTL.X_sub is None:
+            return 0.0
+            
+        # Compute policy at subsample points
+        exponents = self.eta * self.FTL.K_sub_sub @ self.f_cumQ_weights
+        
+        for model in self.f_prev_cumQ_models:
+            exponents += model.evaluate(self.FTL.X_sub)
+        
+        probs = self.softmax(exponents)
+        probs = jnp.clip(probs, eps, 1.0 - eps)
+        
+        # Compute entropy per state
+        entropy_per_state = -jnp.sum(probs * jnp.log(probs), axis=-1)
+        
+        return float(jnp.mean(entropy_per_state))
+    
+    def _compute_mean_q_value(self) -> float:
+        """Compute mean Q-value at subsample points."""
+        if self.f_cumQ_weights is None or self.FTL.K_sub_sub is None:
+            return 0.0
+            
+        # Compute Q-values at subsample points
+        q_values = self.FTL.K_sub_sub @ self.f_cumQ_weights
+        
+        return float(jnp.mean(q_values))
+    
+    def get_metrics(self) -> Dict[str, Any]:
+        """Get the last computed metrics."""
+        return self.last_metrics.copy()
+    
+    def compute_q_values_at_states(self, states: jnp.ndarray) -> jnp.ndarray:
+        """
+        Compute Q-values at given states for all actions.
+        
+        Args:
+            states: States to evaluate, shape (n_states, state_dim)
+            
+        Returns:
+            Q-values, shape (n_states, n_actions)
+        """
+        if self.f_cumQ_weights is None or self.FTL.X_sub is None:
+            return jnp.zeros((states.shape[0], self.n_actions))
+            
+        # Compute kernel between states and subsamples
+        K_states_sub = self.FTL.kernel(states, self.FTL.X_sub)
+        
+        # Compute Q-values
+        q_values = self.eta * K_states_sub @ self.f_cumQ_weights
+        
+        # Add contributions from previous Q-models
+        for model in self.f_prev_cumQ_models:
+            q_values += model.evaluate(states)
+            
+        return q_values
+    
+    def compute_value_function(self, states: jnp.ndarray) -> jnp.ndarray:
+        """
+        Compute value function V(s) = sum_a pi(a|s) * Q(s, a).
+        
+        Args:
+            states: States to evaluate
+            
+        Returns:
+            Value function, shape (n_states,)
+        """
+        q_values = self.compute_q_values_at_states(states)
+        probs = self.softmax(q_values)
+        
+        return jnp.sum(probs * q_values, axis=-1)
 
     def save_checkpoint(self, filename):
         """ Save the important state of the instance as a checkpoint. """
@@ -442,6 +554,7 @@ class MDPManager:
         self.f_Q_mask = state.get('f_Q_mask', None)
 
         # Restore the IncrementalRLS instance state
-        self.FTL = IncrementalRLS(kernel=self.kernel, n_actions=self.n_actions, la=self.la, n_subsamples=self.n_subsamples, early_stopping=self.early_stopping, log_path=self.log_path)
+        use_woodbury = getattr(self, 'use_woodbury', True)
+        self.FTL = IncrementalRLS(kernel=self.kernel, n_actions=self.n_actions, la=self.la, n_subsamples=self.n_subsamples, early_stopping=self.early_stopping, log_path=self.log_path, use_woodbury=use_woodbury)
         self.FTL.__setstate__(state['FTL'])
 

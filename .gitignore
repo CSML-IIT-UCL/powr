@@ -160,5 +160,23 @@ cython_debug/
 #.idea/
 
 runs/
+runs_short/
 wandb/
 .DS_Store
+
+# Local experiment results, plots, and reports
+cartpole_paper_plots/
+cartpole_tuning_report/
+paper_matching_plots/
+*_tuning_results.json
+experiment_results.json
+
+# Benchmark results (plots and data)
+benchmark_results/
+
+# VSCode settings
+.vscode/
+
+# Claude/Cursor temp files
+.claude/
+tmpclaude-*

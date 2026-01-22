@@ -2,6 +2,7 @@ import os
 import jax
 import wandb
 import socket
+import time
 import logging
 import warnings
 import argparse
@@ -18,9 +19,13 @@ warnings.filterwarnings(
 )  # Remove experimental warning
 
 from powr.utils import *
+import hashlib
 from powr.wrappers import *
 from powr.powr import POWR
-from powr.kernels import dirac_kernel, gaussian_kernel, gaussian_kernel_diag
+from powr.kernels import (
+    dirac_kernel, gaussian_kernel, gaussian_kernel_diag, 
+    abel_kernel_diag, matern_kernel_diag, create_kernel
+)
 
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger('jax').setLevel(logging.WARNING)
@@ -51,17 +56,36 @@ def parse_args():
     parser.add_argument("--eval-every", default=1, type=int, help="Evaluate policy every <eval-every> epochs",)
     parser.add_argument("--seed", default=0, type=int, help="seed")
     parser.add_argument("--checkpoint", "-c", default=None, type=str, help="Checkpoint path, None means no checkpoint loading",)
-    parser.add_argument("--device", type=str, default="gpu",  help="Device setting <cpu> or <gpu>",)
+    parser.add_argument("--device", type=str, default="cpu",  help="Device setting <cpu> or <gpu>",)
     parser.add_argument("--notes", default=None, type=str, help="Wandb notes")
     parser.add_argument("--tags", "--wandb-tags", type=str, default=[], nargs="+", help="Tags for wandb run, e.g.: --tags 'optimized' 'baseline' ",)
     parser.add_argument("--offline", default=False, action="store_true", help="Offline run without wandb",)
+    parser.add_argument(
+        "--kernel-method",
+        default="exact",
+        type=str,
+        choices=["exact", "rff", "rff_laplace", "laplace", "matern32", "matern52"],
+        help="Kernel implementation to use: exact rbf (default), rff approximation, laplace, matern32, or matern52",
+    )
+    parser.add_argument(
+        "--rff-n-features",
+        default=256,
+        type=int,
+        help="Number of random Fourier features when using RFF",
+    )
+    parser.add_argument(
+        "--rff-seed",
+        default=0,
+        type=int,
+        help="Seed for random Fourier features",
+    )
     args = parser.parse_args()
     args.algo = "powr"
 
     return args
 
 
-def parse_env(env_name, parallel_envs, sigma):
+def parse_env(env_name, parallel_envs, sigma, kernel_method="exact", rff_n_features=256, rff_seed=0):
     if env_name == "Taxi-v3":
         env = gym.make_vec("Taxi-v3",  num_envs=parallel_envs, vectorization_mode="sync", render_mode="rgb_array")
         kernel = dirac_kernel
@@ -81,21 +105,60 @@ def parse_env(env_name, parallel_envs, sigma):
         env = gym.make_vec("LunarLander-v2", num_envs=parallel_envs, vectorization_mode="sync", render_mode="rgb_array")
         sigma_ll = [sigma for _ in range(6)]
         sigma_ll += [0.0001, 0.0001]
-        kernel = gaussian_kernel_diag(sigma_ll)
+        # for exact diagonal gaussian kernel keep gaussian_kernel_diag; if using RFF, use gaussian_kernel factory
+        if kernel_method == "rff":
+            kernel = gaussian_kernel(sigma_ll, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = abel_kernel_diag(sigma_ll)
+        elif kernel_method == "matern32":
+            kernel = matern_kernel_diag(sigma_ll, nu=1.5)
+        elif kernel_method == "matern52":
+            kernel = matern_kernel_diag(sigma_ll, nu=2.5)
+        else:
+            kernel = gaussian_kernel_diag(sigma_ll)
 
     elif env_name == "MountainCar-v0":
 
         env = gym.make_vec("MountainCar-v0", num_envs=parallel_envs, vectorization_mode="sync", render_mode="rgb_array")
         sigma_mc = [0.1, 0.01]
-        kernel = gaussian_kernel_diag(sigma_mc)
+        if kernel_method == "rff":
+            kernel = gaussian_kernel(sigma_mc, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = abel_kernel_diag(sigma_mc)
+        elif kernel_method == "matern32":
+            kernel = matern_kernel_diag(sigma_mc, nu=1.5)
+        elif kernel_method == "matern52":
+            kernel = matern_kernel_diag(sigma_mc, nu=2.5)
+        else:
+            kernel = gaussian_kernel_diag(sigma_mc)
 
     elif env_name == "CartPole-v1":
         env = gym.make_vec("CartPole-v1", num_envs=parallel_envs, vectorization_mode="sync", render_mode="rgb_array")
-        kernel = gaussian_kernel(sigma)
+        if kernel_method == "rff":
+            kernel = gaussian_kernel(sigma, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "rff_laplace":
+            kernel = create_kernel("rff_laplace", sigma=sigma, n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = create_kernel("laplace", sigma=sigma)
+        elif kernel_method == "matern32":
+            kernel = create_kernel("matern32", sigma=sigma)
+        elif kernel_method == "matern52":
+            kernel = create_kernel("matern52", sigma=sigma)
+        else:
+            kernel = gaussian_kernel(sigma, method="exact")
 
     elif env_name == "Pendulum-v1":
         env = gym.make_vec("Pendulum-v1", g=9.81, num_envs=parallel_envs, vectorization_mode="sync", render_mode="rgb_array")
-        kernel = gaussian_kernel(sigma)
+        if kernel_method == "rff":
+            kernel = gaussian_kernel(sigma, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = create_kernel("laplace", sigma=sigma)
+        elif kernel_method == "matern32":
+            kernel = create_kernel("matern32", sigma=sigma)
+        elif kernel_method == "matern52":
+            kernel = create_kernel("matern52", sigma=sigma)
+        else:
+            kernel = gaussian_kernel(sigma, method="exact")
 
     else:
         raise ValueError(f"Unknown environment: {args.env}")
@@ -159,6 +222,10 @@ if __name__ == "__main__":
         )
 
         run_path = f"{checkpoint}/"
+        # Normalizs run_path for checkpoints too
+        run_path = run_path.strip()
+        run_path = os.path.normpath(run_path)
+        run_path = os.path.abspath(run_path)
     else:
         pprint(vars(args))
         random_string = get_random_string(5)
@@ -174,6 +241,19 @@ if __name__ == "__main__":
             + random_string
             + "/"
         )
+        # Normalise run_path and shorten on Windows if necessary
+        run_path = run_path.strip()
+        run_path = os.path.normpath(run_path)
+        full_run_path = os.path.abspath(run_path)
+        # Shorten long Windows paths (avoid path length problems for tensorboard event files)
+        # Also ensure the eventual event file path (run_path + events.out file) is within Windows limits
+        events_name = f"events.out.tfevents.{int(time.time())}.{socket.gethostname()}"
+        if len(full_run_path) > 240 or len(os.path.join(full_run_path, events_name)) > 260:
+            short_hash = hashlib.sha1(full_run_path.encode("utf-8")).hexdigest()[:8]
+            short_name = f"run_{short_hash}"
+            full_run_path = os.path.abspath(os.path.join("runs_short", args.env, short_name))
+        # create the directory and save config into the final path
+        run_path = full_run_path
         create_dirs(run_path)
         save_config(vars(args), run_path)
 
@@ -235,7 +315,28 @@ if __name__ == "__main__":
 
     # ** Logging Settings **
     # Create tensorboard writer
-    writer = SummaryWriter(f"{run_path}")
+    # ensure run_path has no stray whitespace/newlines and exists
+    run_path = run_path.strip()
+    run_path = os.path.normpath(run_path)
+
+    # debug: show exact string (reveals hidden/control chars)
+    print("run_path repr:", repr(run_path))
+
+    # create the full directory tree
+    os.makedirs(run_path, exist_ok=True)
+
+    # sanity check: try to create a small temp file inside the dir
+    try:
+        test_path = os.path.join(run_path, ".tb_write_test")
+        with open(test_path, "wb") as _f:
+            _f.write(b"")
+        os.remove(test_path)
+    except Exception as e:
+        print("Failed to create test file in run_path:", e)
+        raise
+
+    # open SummaryWriter with explicit logdir
+    writer = SummaryWriter(logdir=run_path)
     writer.add_text(
         "hyperparameters",
         "|param|value|\n|-|-|\n%s"
@@ -298,9 +399,52 @@ if __name__ == "__main__":
     delete_Q_memory = args.delete_Q_memory
 
     # ** Environment Settings **
-    env, kernel = parse_env(args.env, parallel_envs, args.sigma)
+    env, kernel = parse_env(
+        args.env,
+        parallel_envs,
+        args.sigma,
+        kernel_method=args.kernel_method,
+        rff_n_features=args.rff_n_features,
+        rff_seed=args.rff_seed,
+    )
+
+    # Print kernel information so it's clear whether RFF is being used
+    try:
+        kname = type(kernel).__name__
+        # detect RFF by attribute or class name
+        is_rff = hasattr(kernel, "n_features") or hasattr(kernel, "_transform") or kname in ("RFFGaussian", "RFFLaplace")
+        if is_rff:
+            print(f"Using RFF kernel: n_features={args.rff_n_features}, seed={args.rff_seed}, sigma={args.sigma}")
+        else:
+            # exact kernel (closure) will have __name__ == '_exact'
+            if callable(kernel) and getattr(kernel, "__name__", "") == "_exact":
+                print(f"Using exact Gaussian kernel with sigma={args.sigma}")
+            else:
+                print(f"Using kernel: {kname}")
+    except Exception:
+        pass
 
     # ** Kernel Settings **
+    # Pre-initialize RFF kernel parameters outside of any jitted context to avoid tracer leaks
+    try:
+        obs_space = getattr(env, "single_observation_space", None) or getattr(env, "observation_space", None)
+    except Exception:
+        obs_space = getattr(env, "observation_space", None)
+
+    if obs_space is None:
+        dim = None
+    elif isinstance(obs_space, gym.spaces.Discrete):
+        dim = 1
+    else:
+        dim = obs_space.shape[0]
+
+    if hasattr(kernel, "_initialize") and dim is not None:
+        # call initialize once outside the JIT tracing
+        try:
+            kernel._initialize(dim)
+        except Exception:
+            pass
+
     def to_be_jit_kernel(X, Y):
         return kernel(X, Y)
 
