@@ -22,7 +22,10 @@ from powr.utils import *
 import hashlib
 from powr.wrappers import *
 from powr.powr import POWR
-from powr.kernels import dirac_kernel, gaussian_kernel, gaussian_kernel_diag
+from powr.kernels import (
+    dirac_kernel, gaussian_kernel, gaussian_kernel_diag, 
+    abel_kernel_diag, matern_kernel_diag, create_kernel
+)
 
 logging.basicConfig(level=logging.WARNING)
 logging.getLogger('jax').setLevel(logging.WARNING)
@@ -61,8 +64,8 @@ def parse_args():
         "--kernel-method",
         default="exact",
         type=str,
-        choices=["exact", "rff"],
-        help="Kernel implementation to use: exact rbf (default) or rff approximation",
+        choices=["exact", "rff", "rff_laplace", "laplace", "matern32", "matern52"],
+        help="Kernel implementation to use: exact rbf (default), rff approximation, laplace, matern32, or matern52",
     )
     parser.add_argument(
         "--rff-n-features",
@@ -105,6 +108,12 @@ def parse_env(env_name, parallel_envs, sigma, kernel_method="exact", rff_n_featu
         # for exact diagonal gaussian kernel keep gaussian_kernel_diag; if using RFF, use gaussian_kernel factory
         if kernel_method == "rff":
             kernel = gaussian_kernel(sigma_ll, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = abel_kernel_diag(sigma_ll)
+        elif kernel_method == "matern32":
+            kernel = matern_kernel_diag(sigma_ll, nu=1.5)
+        elif kernel_method == "matern52":
+            kernel = matern_kernel_diag(sigma_ll, nu=2.5)
         else:
             kernel = gaussian_kernel_diag(sigma_ll)
 
@@ -114,16 +123,42 @@ def parse_env(env_name, parallel_envs, sigma, kernel_method="exact", rff_n_featu
         sigma_mc = [0.1, 0.01]
         if kernel_method == "rff":
             kernel = gaussian_kernel(sigma_mc, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = abel_kernel_diag(sigma_mc)
+        elif kernel_method == "matern32":
+            kernel = matern_kernel_diag(sigma_mc, nu=1.5)
+        elif kernel_method == "matern52":
+            kernel = matern_kernel_diag(sigma_mc, nu=2.5)
         else:
             kernel = gaussian_kernel_diag(sigma_mc)
 
     elif env_name == "CartPole-v1":
         env = gym.make_vec("CartPole-v1", num_envs=parallel_envs, vectorization_mode="sync", render_mode="rgb_array")
-        kernel = gaussian_kernel(sigma, method=kernel_method, n_features=rff_n_features, seed=rff_seed)
+        if kernel_method == "rff":
+            kernel = gaussian_kernel(sigma, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "rff_laplace":
+            kernel = create_kernel("rff_laplace", sigma=sigma, n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = create_kernel("laplace", sigma=sigma)
+        elif kernel_method == "matern32":
+            kernel = create_kernel("matern32", sigma=sigma)
+        elif kernel_method == "matern52":
+            kernel = create_kernel("matern52", sigma=sigma)
+        else:
+            kernel = gaussian_kernel(sigma, method="exact")
 
     elif env_name == "Pendulum-v1":
         env = gym.make_vec("Pendulum-v1", g=9.81, num_envs=parallel_envs, vectorization_mode="sync", render_mode="rgb_array")
-        kernel = gaussian_kernel(sigma, method=kernel_method, n_features=rff_n_features, seed=rff_seed)
+        if kernel_method == "rff":
+            kernel = gaussian_kernel(sigma, method="rff", n_features=rff_n_features, seed=rff_seed)
+        elif kernel_method == "laplace":
+            kernel = create_kernel("laplace", sigma=sigma)
+        elif kernel_method == "matern32":
+            kernel = create_kernel("matern32", sigma=sigma)
+        elif kernel_method == "matern52":
+            kernel = create_kernel("matern52", sigma=sigma)
+        else:
+            kernel = gaussian_kernel(sigma, method="exact")
 
     else:
         raise ValueError(f"Unknown environment: {args.env}")
@@ -372,6 +407,22 @@ if __name__ == "__main__":
         rff_n_features=args.rff_n_features,
         rff_seed=args.rff_seed,
     )
+
+    # Print kernel information so it's clear whether RFF is being used
+    try:
+        kname = type(kernel).__name__
+        # detect RFF by attribute or class name
+        is_rff = hasattr(kernel, "n_features") or hasattr(kernel, "_transform") or kname in ("RFFGaussian", "RFFLaplace")
+        if is_rff:
+            print(f"Using RFF kernel: n_features={args.rff_n_features}, seed={args.rff_seed}, sigma={args.sigma}")
+        else:
+            # exact kernel (closure) will have __name__ == '_exact'
+            if callable(kernel) and getattr(kernel, "__name__", "") == "_exact":
+                print(f"Using exact Gaussian kernel with sigma={args.sigma}")
+            else:
+                print(f"Using kernel: {kname}")
+    except Exception:
+        pass
 
     # ** Kernel Settings **
     # Pre-initialize RFF kernel parameters outside of any jitted context to avoid tracer leaks

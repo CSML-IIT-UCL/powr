@@ -187,6 +187,9 @@ class POWR:
             
             execution_time = time.time() - start_sampling
 
+            # ** Get metrics from MDPManager **
+            extra_metrics = self.mdp_manager.get_metrics() if hasattr(self.mdp_manager, 'get_metrics') else None
+
             # ** Log data **
             log_epoch_statistics(
                 self.tensorboard_writer,
@@ -203,6 +206,7 @@ class POWR:
                 t_pmd,
                 t_eval,
                 execution_time,
+                extra_metrics=extra_metrics,
             )
 
             
